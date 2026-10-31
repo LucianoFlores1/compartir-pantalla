@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#111">
+<title>Control PC</title>
+<style>
+  :root { --bg: #111; --key: #262626; --key-on: #3a3a3a; --fg: #eee; --dim: #888; --accent: #4af; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px system-ui, sans-serif;
+         padding: 12px 16px calc(16px + env(safe-area-inset-bottom)); }
+  #screen { display: block; width: 100%; border-radius: 8px; background: #000; min-height: 120px;
+            -webkit-touch-callout: none; user-select: none; touch-action: manipulation; }
+  .hint { color: var(--dim); font-size: 13px; margin: 6px 0 14px; }
+  .row { display: grid; gap: 8px; margin-bottom: 8px; }
+  .c3 { grid-template-columns: repeat(3, 1fr); }
+  .c4 { grid-template-columns: repeat(4, 1fr); }
+  button { background: var(--key); color: var(--fg); border: 0; border-radius: 12px; min-height: 56px;
+           font: inherit; font-size: 18px; touch-action: manipulation; }
+  button:active { background: var(--key-on); }
+  button.main, button[aria-pressed="true"] { background: var(--accent); color: #000; font-weight: 600; }
+  form { display: flex; gap: 8px; margin-top: 14px; }
+  input { flex: 1; min-width: 0; background: var(--key); color: var(--fg); border: 0; border-radius: 12px;
+          padding: 0 14px; font-size: 16px; min-height: 56px; }
+  #err { color: #f66; font-size: 13px; min-height: 1em; }
+</style>
+</head>
+<body>
+<img id="screen" src="/preview" alt="Pantalla del PC. Toca para hacer clic.">
+<p class="hint">Toca la imagen = clic ahí · mantén pulsado = clic derecho</p>
+<div class="row"><button id="rmode" aria-pressed="false">🖱 Clic derecho (siguiente toque)</button></div>
+
+<div class="row c3">
+  <button data-key="37" aria-label="Retroceder">⏪</button>
+  <button data-key="32" class="main" aria-label="Reproducir o pausar">⏯</button>
+  <button data-key="39" aria-label="Adelantar">⏩</button>
+</div>
+<div class="row c4">
+  <button data-wheel="240" aria-label="Desplazar arriba">▲</button>
+  <button data-wheel="-240" aria-label="Desplazar abajo">▼</button>
+  <button data-key="70" aria-label="Pantalla completa del reproductor">⛶ F</button>
+  <button data-key="27">Esc</button>
+</div>
+<div class="row c4">
+  <button data-key="174" aria-label="Bajar volumen">🔉</button>
+  <button data-key="175" aria-label="Subir volumen">🔊</button>
+  <button data-key="173" aria-label="Silenciar">🔇</button>
+  <button data-key="122">F11</button>
+</div>
+<div class="row c4">
+  <button data-key="9">Tab</button>
+  <button data-key="38" aria-label="Arriba">↑</button>
+  <button data-key="40" aria-label="Abajo">↓</button>
+  <button data-key="13">Enter</button>
+</div>
+
+<form id="type">
+  <input id="text" placeholder="Escribir en el PC…" autocomplete="off" enterkeyhint="send">
+  <button type="button" data-key="8" aria-label="Borrar">⌫</button>
+  <button class="main">Enviar</button>
+</form>
+<p id="err" role="status"></p>
+
+<script>
+const k = new URLSearchParams(location.search).get('k') || '';
+const err = document.getElementById('err');
+const screen = document.getElementById('screen');
+
+async function send(m) {
+  navigator.vibrate?.(10);
+  try {
+    const r = await fetch('/input', { method: 'POST', headers: { 'x-k': k }, body: JSON.stringify(m) });
+    err.textContent = r.status === 403 ? 'Link sin token válido: ábrelo desde la URL que muestra el PC.' : '';
+  } catch { err.textContent = 'Sin conexión con el PC'; }
+}
+
+function pos(e) {
+  const r = screen.getBoundingClientRect();
+  return { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
+}
+// Mantener pulsado no dispara clic derecho en todos los teléfonos (p. ej. iPhone): el botón arma el siguiente toque.
+const rmode = document.getElementById('rmode');
+rmode.addEventListener('click', () => rmode.setAttribute('aria-pressed', rmode.getAttribute('aria-pressed') !== 'true'));
+screen.addEventListener('click', e => {
+  const right = rmode.getAttribute('aria-pressed') === 'true';
+  rmode.setAttribute('aria-pressed', 'false');
+  send({ t: right ? 'rclick' : 'click', ...pos(e) });
+});
+screen.addEventListener('contextmenu', e => { e.preventDefault(); send({ t: 'rclick', ...pos(e) }); });
+// Si el stream se corta (PC reiniciado, Wi-Fi), vuelve a pedirlo.
+screen.addEventListener('error', () => setTimeout(() => { screen.src = '/preview?t=' + Date.now(); }, 2000));
+
+document.querySelectorAll('[data-key]').forEach(b => b.addEventListener('click', () => send({ t: 'key', vk: +b.dataset.key })));
+document.querySelectorAll('[data-wheel]').forEach(b => b.addEventListener('click', () => send({ t: 'wheel', d: +b.dataset.wheel })));
+
+document.getElementById('type').addEventListener('submit', e => {
+  e.preventDefault();
+  const t = document.getElementById('text');
+  if (t.value) send({ t: 'text', s: t.value });
+  t.value = '';
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Pantalla PC</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+  #start { position: fixed; inset: 0; top: 0; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center;
+           background: #000; color: #fff; font: 48px sans-serif; border: 0; width: 100%; }
+  #start:focus { outline: 6px solid #4af; }
+  #status { position: fixed; left: 24px; bottom: 24px; color: #888; font: 24px sans-serif; }
+</style>
+</head>
+<body>
+<video id="v" playsinline></video>
+<button id="start" autofocus>Pulsa OK en el control para empezar</button>
+<div id="status"></div>
+<script>
+// ES5 a propósito: el navegador de la TV Samsung 2017 es antiguo.
+var v = document.getElementById('v');
+var btn = document.getElementById('start');
+var statusEl = document.getElementById('status');
+var TEST = (location.search.match(/src=(test\w+)/) || [])[1]; // DEBUG-LAG: ?src=test60 / test30 = video de prueba
+var SRC = TEST ? '/hls/' + TEST + '.m3u8' : '/hls/live.m3u8';
+var hls = null;
+
+function status(t) { statusEl.textContent = t; }
+
+function load() {
+  status('Conectando...');
+  if (v.canPlayType('application/vnd.apple.mpegurl')) {
+    v.src = SRC + '?t=' + Date.now();
+    v.play();
+  } else if (window.Hls) {
+    if (hls) hls.destroy();
+    hls = new Hls({ liveSyncDurationCount: 2, liveMaxLatencyDurationCount: 4 });
+    hls.loadSource(SRC);
+    hls.attachMedia(v);
+    hls.on(Hls.Events.MANIFEST_PARSED, function () { v.play(); });
+    hls.on(Hls.Events.ERROR, function (e, d) { if (d.fatal) retry(); });
+  } else {
+    var s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js';
+    s.onload = load;
+    s.onerror = function () { status('Esta TV no reproduce HLS'); };
+    document.head.appendChild(s);
+  }
+}
+
+var retryTimer = null;
+function retry() {
+  status('Reconectando...');
+  clearTimeout(retryTimer);
+  retryTimer = setTimeout(load, 2000);
+}
+
+// El reproductor de la Samsung a veces arranca pegado al borde del vivo (<1 s guardado) y se traba con cada segmento.
+// Pausar hasta juntar 3 s da un colchón fijo; el retraso sube ~3 s pero la imagen es fluida.
+var cushioning = false, started = false, waits = 0;
+function ahead() { return v.buffered.length ? v.buffered.end(v.buffered.length - 1) - v.currentTime : 0; }
+function cushion() {
+  if (cushioning || TEST) return;
+  cushioning = true;
+  v.pause();
+  status('Cargando...');
+  var tries = 0;
+  var iv = setInterval(function () {
+    if (ahead() >= 3 || ++tries > 30) { clearInterval(iv); cushioning = false; status(''); v.play(); } // máx. 6 s esperando
+  }, 200);
+}
+v.addEventListener('playing', function () { status(''); if (!started) { started = true; cushion(); } });
+v.addEventListener('waiting', function () { waits++; cushion(); });
+v.addEventListener('error', retry);
+v.addEventListener('ended', retry);
+
+// Sin "saltar al vivo": medido, la TV no se atrasa (0.2 s en 1.5 h) y su v.buffered no es confiable;
+// el salto se disparaba con un valor falso y se comía 13 s de película.
+var lastTime = 0, stuck = 0;
+setInterval(function () {
+  if (v.buffered.length) { // DEBUG-LAG
+    var q = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality() : {};
+    var x = new XMLHttpRequest(); x.open('GET', '/tvstat?ahead=' + (v.buffered.end(v.buffered.length - 1) - v.currentTime).toFixed(2) + '&t=' + v.currentTime.toFixed(2) + '&paused=' + v.paused + '&rs=' + v.readyState +
+      '&decoded=' + (v.webkitDecodedFrameCount !== undefined ? v.webkitDecodedFrameCount : q.totalVideoFrames) + '&dropped=' + (v.webkitDroppedFrameCount !== undefined ? v.webkitDroppedFrameCount : q.droppedVideoFrames) +
+      '&w=' + v.videoWidth + '&h=' + v.videoHeight + '&waits=' + waits + '&src=' + (TEST || 'live') + '&page=3'); x.send();
+  }
+  stuck = (!v.paused && !cushioning && v.currentTime === lastTime) ? stuck + 1 : 0;
+  lastTime = v.currentTime;
+  if (stuck >= 4) { stuck = 0; retry(); } // 8 s congelado: reconecta
+}, 2000);
+
+btn.addEventListener('click', function () {
+  btn.style.display = 'none';
+  var fs = document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen;
+  if (fs) fs.call(document.documentElement);
+  load();
+});
+btn.focus();
+</script>
+</body>
+</html>
