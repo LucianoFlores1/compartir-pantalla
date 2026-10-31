@@ -52,14 +52,16 @@ function startFfmpeg(audio) {
   fs.mkdirSync(HLS_DIR, { recursive: true });
 
   // Sincronización A/V (labios):
-  // Ambos flujos (video y audio) se anclan al mismo reloj real de pared (wallclock) con -use_wallclock_as_timestamps 1
-  // y a la hora de arranque t0 (STARTPTS - t0).
-  //  - Video: avanza por número de cuadro a 60 fps: N/(60*TB).
-  //  - Audio: avanza por número de muestras a 48 kHz: N/(SR*TB), sincronizado muestra a muestra con el video.
-  // Con aresample=async=1000:min_hard_comp=0.100000 se evitan desvíos progresivos (drift) y microcortes.
+  //  - video: hora real de llegada SOLO del primer cuadro (STARTPTS); el resto sigue N/60.
+  //  - audio: reloj nativo dshow ajustado a q0.
+  // DirectShow tarda ~140ms más que ddagrab en inicializar y el buffer WASAPI agrega ~30ms.
+  // AUDIO_OFFSET compensa ese retraso inicial fijo para alinear el sonido exacto con los labios.
+  // aresample=async=1000 elimina el desvío progresivo en el tiempo sin encolar audio.
+  const AUDIO_OFFSET = 0.150; // 150 ms de compensación de latencia de captura
   const t0 = (Date.now() / 1000).toFixed(3);
+  const q0 = (Number(process.hrtime.bigint()) / 1e9).toFixed(3);
   const args = ['-hide_banner', '-loglevel', 'warning', '-copyts', '-use_wallclock_as_timestamps', '1', '-f', 'lavfi', '-i', 'ddagrab=framerate=60:output_idx=0'];
-  if (audio) args.push('-use_wallclock_as_timestamps', '1', '-f', 'dshow', '-audio_buffer_size', '50', '-i', `audio=${audio}`);
+  if (audio) args.push('-f', 'dshow', '-audio_buffer_size', '20', '-i', `audio=${audio}`);
   args.push(
     '-filter_complex',
     // setpts=N/60: ddagrab entrega 60 cuadros/s pero con marcas desparejas (2–32 ms); al encajarlas en 60 fps fijos
@@ -67,7 +69,7 @@ function startFfmpeg(audio) {
     // No usar la hora de llegada en cada cuadro: los que llegan juntos chocan y se descartan (bajó a ~8 fps).
     // shortcut: si la captura perdiera cuadros, el video se atrasaría respecto al audio; vigilar desfase de labios.
     `[0:v]hwdownload,format=bgra,setpts=N/(60*TB)+STARTPTS-${t0}/TB,split[a][b];[a]scale='min(1920,iw)':-2,format=nv12[tv];[b]fps=8,scale=640:-2[pv]` +
-      (audio ? `;[1:a]asetpts=N/(SR*TB)+STARTPTS-${t0}/TB,aresample=async=1000:min_hard_comp=0.100000[au]` : ''),
+      (audio ? `;[1:a]asetpts=PTS-${q0}/TB-${AUDIO_OFFSET}/TB,aresample=async=1000:min_hard_comp=0.100000[au]` : ''),
     '-map', '[tv]', ...(audio ? ['-map', '[au]', '-c:a', 'aac', '-b:a', '160k', '-ar', '48000'] : []),
     '-c:v', 'h264_amf', '-usage', 'lowlatency', '-quality', 'speed', '-rc', 'cbr', '-b:v', '6M',
     // 60 = refresco del monitor: un video de 24 fps queda con el mismo ritmo que en el PC (a 30 fps se repetían cuadros de forma irregular).
