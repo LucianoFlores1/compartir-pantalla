@@ -22,7 +22,8 @@ var v = document.getElementById('v');
 var btn = document.getElementById('start');
 var statusEl = document.getElementById('status');
 var TEST = (location.search.match(/src=(test\w+)/) || [])[1]; // DEBUG-LAG: ?src=test60 / test30 = video de prueba
-var SRC = TEST ? '/hls/' + TEST + '.m3u8' : '/hls/live.m3u8';
+var K_TOKEN = (location.search.match(/[?&]k=([a-f0-9]+)/i) || [])[1];
+var SRC = (TEST ? '/hls/' + TEST + '.m3u8' : '/hls/live.m3u8') + (K_TOKEN ? '?k=' + K_TOKEN : '');
 var hls = null;
 
 function status(t) { statusEl.textContent = t; }
@@ -30,7 +31,7 @@ function status(t) { statusEl.textContent = t; }
 function load() {
   status('Conectando...');
   if (v.canPlayType('application/vnd.apple.mpegurl')) {
-    v.src = SRC + '?t=' + Date.now();
+    v.src = SRC + (SRC.indexOf('?') !== -1 ? '&t=' : '?t=') + Date.now();
     v.play();
   } else if (window.Hls) {
     if (hls) hls.destroy();

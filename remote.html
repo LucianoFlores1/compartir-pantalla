@@ -66,6 +66,7 @@
 const k = new URLSearchParams(location.search).get('k') || '';
 const err = document.getElementById('err');
 const screen = document.getElementById('screen');
+if (k) screen.src = '/preview?k=' + encodeURIComponent(k);
 
 async function send(m) {
   navigator.vibrate?.(10);
@@ -89,7 +90,9 @@ screen.addEventListener('click', e => {
 });
 screen.addEventListener('contextmenu', e => { e.preventDefault(); send({ t: 'rclick', ...pos(e) }); });
 // Si el stream se corta (PC reiniciado, Wi-Fi), vuelve a pedirlo.
-screen.addEventListener('error', () => setTimeout(() => { screen.src = '/preview?t=' + Date.now(); }, 2000));
+screen.addEventListener('error', () => setTimeout(() => {
+  screen.src = '/preview?' + (k ? 'k=' + encodeURIComponent(k) + '&' : '') + 't=' + Date.now();
+}, 2000));
 
 document.querySelectorAll('[data-key]').forEach(b => b.addEventListener('click', () => send({ t: 'key', vk: +b.dataset.key })));
 document.querySelectorAll('[data-wheel]').forEach(b => b.addEventListener('click', () => send({ t: 'wheel', d: +b.dataset.wheel })));
