@@ -35,7 +35,14 @@ function load() {
     v.play();
   } else if (window.Hls) {
     if (hls) hls.destroy();
-    hls = new Hls({ liveSyncDurationCount: 2, liveMaxLatencyDurationCount: 4 });
+    hls = new Hls({
+      liveSyncDurationCount: 2,
+      liveMaxLatencyDurationCount: 4,
+      xhrSetup: function (xhr, url) {
+        xhr.withCredentials = true;
+        if (K_TOKEN) xhr.setRequestHeader('x-k', K_TOKEN);
+      }
+    });
     hls.loadSource(SRC);
     hls.attachMedia(v);
     hls.on(Hls.Events.MANIFEST_PARSED, function () { v.play(); });

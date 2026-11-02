@@ -146,7 +146,13 @@ function checkAuth(req, url) {
   return false;
 }
 
-function loginPage(error = false) {
+function getCookieHeader(req) {
+  const isHttps = req.headers['x-forwarded-proto'] === 'https' || Boolean(req.headers['cf-ray']);
+  const sameSite = isHttps ? 'SameSite=None; Secure' : 'SameSite=Lax';
+  return `token=${TOKEN}; Path=/; HttpOnly; ${sameSite}; Max-Age=31536000`;
+}
+
+function loginPage(target = '/remote', error = false) {
   return `<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -175,7 +181,7 @@ function loginPage(error = false) {
 <div class="card">
   <h1>🔒 Control Remoto PC</h1>
   <p>Introduce el token de seguridad para controlar tu PC desde el exterior.</p>
-  <form onsubmit="event.preventDefault(); const t = document.getElementById('t').value.trim(); if (t) location.href = '/remote?k=' + encodeURIComponent(t);">
+  <form onsubmit="event.preventDefault(); const t = document.getElementById('t').value.trim(); if (t) location.href = '${target}?k=' + encodeURIComponent(t);">
     <input id="t" placeholder="Token" autocomplete="off" autofocus required>
     <button>Conectar</button>
   </form>
@@ -185,18 +191,18 @@ function loginPage(error = false) {
 </html>`;
 }
 
-http.createServer((req, res) => {
+function handleHttpRequest(req, res) {
   const url = new URL(req.url, 'http://x');
   const authed = checkAuth(req, url);
   const setCookie = url.searchParams.get('k') === TOKEN
-    ? { 'Set-Cookie': `token=${TOKEN}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000` }
+    ? { 'Set-Cookie': getCookieHeader(req) }
     : {};
 
   // no-store: el navegador de la TV guardaba una versión vieja de la página y la seguía usando tras actualizarla.
   if (url.pathname === '/' || url.pathname === '/tv') {
     if (!authed) {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      return res.end(loginPage());
+      return res.end(loginPage(url.pathname === '/' ? '/remote' : url.pathname));
     }
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', ...setCookie });
     return res.end(page('tv.html'));
@@ -204,7 +210,7 @@ http.createServer((req, res) => {
   if (url.pathname === '/remote') {
     if (!authed) {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      return res.end(loginPage());
+      return res.end(loginPage('/remote'));
     }
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', ...setCookie });
     return res.end(page('remote.html'));
@@ -215,8 +221,13 @@ http.createServer((req, res) => {
     if (!/^[\w.-]+$/.test(name)) { res.writeHead(400); return res.end(); }
     return fs.readFile(path.join(HLS_DIR, name), (err, data) => {
       if (err) { res.writeHead(404); return res.end(); }
+      let outData = data;
+      if (name.endsWith('.m3u8')) {
+        const text = data.toString('utf8');
+        outData = Buffer.from(text.replace(/^([\w.-]+\.ts)$/gm, `$1?k=${TOKEN}`));
+      }
       res.writeHead(200, { 'Content-Type': TYPES[path.extname(name)] || 'application/octet-stream', 'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*' });
-      res.end(data);
+      res.end(outData);
     });
   }
   if (url.pathname === '/tvstat') { // DEBUG-LAG: solo avisa cuando la TV se queda casi sin colchón (riesgo de corte)
@@ -245,22 +256,27 @@ http.createServer((req, res) => {
     return req.on('end', () => {
       let cmd = null;
       try { cmd = toCommand(JSON.parse(body)); } catch {}
-      if (cmd) input.stdin.write(cmd + '\n');
+      if (cmd && input) input.stdin.write(cmd + '\n');
       res.writeHead(cmd ? 204 : 400);
       res.end();
     });
   }
   res.writeHead(404);
   res.end();
-}).on('error', err => {
-  if (err.code !== 'EADDRINUSE') throw err;
-  console.log(`El puerto ${PORT} ya está en uso: el sistema ya está abierto en otra ventana.`);
-  process.exit(1);
-}).listen(PORT, () => {
-  // "Conectar" UDP no envía nada; solo hace que el SO elija la interfaz de la ruta por defecto (la del router).
-  const sock = require('dgram').createSocket('udp4');
-  sock.connect(80, '8.8.8.8', () => { const ip = sock.address().address; sock.close(); ready(ip); });
-});
+}
+
+let serverInstance = null;
+if (require.main === module) {
+  serverInstance = http.createServer(handleHttpRequest).on('error', err => {
+    if (err.code !== 'EADDRINUSE') throw err;
+    console.log(`El puerto ${PORT} ya está en uso: el sistema ya está abierto en otra ventana.`);
+    process.exit(1);
+  }).listen(PORT, () => {
+    // "Conectar" UDP no envía nada; solo hace que el SO elija la interfaz de la ruta por defecto (la del router).
+    const sock = require('dgram').createSocket('udp4');
+    sock.connect(80, '8.8.8.8', () => { const ip = sock.address().address; sock.close(); ready(ip); });
+  });
+}
 
 // ---------- Cloudflare Tunnel (Acceso Remoto por Internet) ----------
 let tunnelProc = null;
@@ -368,4 +384,19 @@ function ready(ip) {
   console.log('='.repeat(64) + '\n');
   startFfmpeg(audio);
   startTunnel();
+}
+
+if (typeof module !== 'undefined') {
+  module.exports = {
+    splitJpegs,
+    toCommand,
+    isLocalNetwork,
+    checkAuth,
+    loginPage,
+    getCookieHeader,
+    handleHttpRequest,
+    TOKEN,
+    PORT,
+    HLS_DIR
+  };
 }
